@@ -46,7 +46,10 @@
     background: var(--frame);
     box-shadow: 0 10px 30px rgba(0,0,0,.25);
   }
-  canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
+  canvas {
+    display: block; width: 100%; height: auto; cursor: crosshair;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
   canvas:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
   p.help {
     max-width: 1280px;
@@ -57,19 +60,38 @@
     line-height: 1.5;
   }
   p.help b { color: var(--ink); }
+  .touch-help, .rotate { display: none; }
+  @media (pointer: coarse) {
+    body { padding: 8px; gap: 8px; }
+    .wrap { max-width: min(1280px, calc((100vh - 16px) * 16 / 9), calc((100dvh - 16px) * 16 / 9)); border-width: 3px; }
+    .keys-help { display: none; }
+    .touch-help { display: inline; }
+  }
+  @media (pointer: coarse) and (orientation: portrait) {
+    .rotate { display: block; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <canvas id="game" width="1280" height="720" tabindex="0" aria-label="Prepare for Suck game. Use keyboard and mouse."></canvas>
+  <canvas id="game" width="1280" height="720" tabindex="0" aria-label="Prepare for Suck game. Use keyboard and mouse, or touch."></canvas>
 </div>
+<p class="help rotate"><b>Turn your device sideways</b> for a bigger screen.</p>
 <p class="help">
+  <span class="keys-help">
   <b>Move:</b> WASD or arrow keys. <b>Aim:</b> mouse.
   <b>Kettlebell swing:</b> left click or J (also knocks thrown items back).
   <b>Battle ropes:</b> right click or K. <b>Squat slam:</b> Space.
   <b>The answer is always more pain:</b> Q when the Pain meter is full.
   <b>Pause:</b> P or Esc. <b>Sound on or off:</b> M.
+  </span>
+  <span class="touch-help">
+  <b>Move:</b> drag anywhere on the left side. <b>Aim:</b> automatic, at the closest nana.
+  <b>Swing, Ropes, Slam:</b> hold the buttons on the right. Swings also knock thrown items back.
+  <b>Pain:</b> tap when the ring is full. <b>Pause:</b> top right button.
+  </span>
   Keep your heart rate up. Below 95 bpm the brain fog sets in.
+  Progress saves after every week you survive.
 </p>
 
 <script>
@@ -193,7 +215,48 @@ let uiRects = [];
 let lastFrame = performance.now();
 let titleT = 0;
 
+// touch: stick is the move joystick, held maps touch id to the action button it is holding
+const touch = { on: false, stick: null, held: {} };
+const TBTN = [
+  { id: "swing", x: 1166, y: 470, r: 58, label: "Swing" },
+  { id: "rope",  x: 1044, y: 418, r: 44, label: "Ropes" },
+  { id: "slam",  x: 1044, y: 546, r: 44, label: "Slam" },
+  { id: "ult",   x: 1176, y: 330, r: 40, label: "Pain" },
+  { id: "pause", x: ARENA.x1 - 34, y: ARENA.y0 + 34, r: 24, label: "" }
+];
+const touchHeld = id => Object.values(touch.held).includes(id);
+
+// ---------- Saved progress ----------
+// Saved at the upgrade screen after each week, so Continue drops you back there.
+const SAVE_KEY = "prepare-for-suck-save";
+function loadSave() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (s && WAVES[s.waveIdx + 1] && s.lv) return s;
+  } catch (e) {}
+  return null;
+}
+let saved = loadSave();
+function writeSave() {
+  const g = game;
+  saved = { waveIdx: g.waveIdx, reps: g.reps, lv: { ...g.lv }, kills: g.kills, carryFatigue: g.carryFatigue };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(saved)); } catch (e) {}
+}
+function clearSave() {
+  saved = null;
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+}
+function continueGame() {
+  const s = saved;
+  if (!s) return;
+  const lv = { rom: 0, cardio: 0, grip: 0, knee: 0 };
+  for (const k in lv) lv[k] = clamp(Math.floor(Number(s.lv[k]) || 0), 0, MAXLV);
+  game = { waveIdx: s.waveIdx, reps: Math.max(0, Number(s.reps) || 0), lv, kills: Number(s.kills) || 0, carryFatigue: clamp(Number(s.carryFatigue) || 0, 0, 100) };
+  state = "upgrade";
+}
+
 function newGame() {
+  clearSave();
   game = { waveIdx: 0, reps: 0, lv: { rom: 0, cardio: 0, grip: 0, knee: 0 }, kills: 0, carryFatigue: 15 };
   startWave();
 }
@@ -404,10 +467,22 @@ function update(dt) {
 function updatePlayer(dt) {
   const g = game, p = g.p, L = g.lv;
   const fog = p.hr < 95 && p.ult <= 0;
-  p.face = Math.atan2(mouse.y - p.y, mouse.x - p.x);
 
   let mx = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
   let my = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+  if (touch.stick) {
+    const s = touch.stick, dx = s.x - s.sx, dy = s.y - s.sy, l = Math.hypot(dx, dy);
+    if (l > 12) { mx = dx / l; my = dy / l; }
+  }
+
+  if (touch.on) {
+    // auto-aim at the closest nana, otherwise face where you're walking
+    let best = null, bd = 520;
+    for (const e of g.enemies) { const d = dist(p, e); if (d < bd) { bd = d; best = e; } }
+    if (best) p.face = ang(p, best);
+    else if (mx || my) p.face = Math.atan2(my, mx);
+  } else p.face = Math.atan2(mouse.y - p.y, mouse.x - p.x);
+
   const disabled = p.sleep > 0 || p.frozen > 0;
   if (disabled) { mx = 0; my = 0; }
   const ml = Math.hypot(mx, my) || 1; mx /= ml; my /= ml;
@@ -456,9 +531,9 @@ function updatePlayer(dt) {
   }
 
   if (!disabled) {
-    if ((mouse.down || keys.KeyJ) && p.cd.swing <= 0) doSwing();
-    if ((mouse.rdown || keys.KeyK) && p.cd.rope <= 0) doRope();
-    if (keys.Space && p.cd.slam <= 0) doSlam(false);
+    if ((mouse.down || keys.KeyJ || touchHeld("swing")) && p.cd.swing <= 0) doSwing();
+    if ((mouse.rdown || keys.KeyK || touchHeld("rope")) && p.cd.rope <= 0) doRope();
+    if ((keys.Space || touchHeld("slam")) && p.cd.slam <= 0) doSlam(false);
   }
 
   if (p.ult > 0) {
@@ -672,11 +747,13 @@ function waveDone() {
   g.reps += 15;
   g.carryFatigue = Math.max(0, g.p.fatigue - 35);
   if (g.waveIdx >= WAVES.length - 1) {
+    clearSave();
     state = "win";
     [262, 330, 392, 523].forEach((f, i) => sfx(f, 0.3, "square", 0.05, 0, i * 0.15));
     return;
   }
   state = "upgrade";
+  writeSave();
   sfx(523, 0.12, "square", 0.04); sfx(659, 0.18, "square", 0.04, 0, 0.12);
 }
 
@@ -688,6 +765,7 @@ function buyUpgrade(i) {
   const cost = upCost(lv);
   if (g.reps < cost) { sfx(120, 0.12, "square", 0.04); return; }
   g.reps -= cost; g.lv[u.id]++;
+  writeSave();
   sfx(700, 0.08, "square", 0.04); sfx(940, 0.1, "square", 0.04, 0, 0.07);
 }
 function nextWave() { game.waveIdx++; startWave(); }
@@ -1043,8 +1121,8 @@ function drawHud() {
   text(g.reps + " reps", W - 22, 30, 24, C.hudInk, DISPLAY, "right");
   text("Spend them between weeks", W - 22, 62, 13, C.hudMuted, BODY, "right", "400");
 
-  // cooldown chips
-  const chips = [["Swing", p.cd.swing, 0.42, "LMB / J"], ["Ropes", p.cd.rope, 0.7, "RMB / K"], ["Slam", p.cd.slam, 4, "Space"]];
+  // cooldown chips (touch players see cooldowns on the buttons instead)
+  const chips = touch.on ? [] : [["Swing", p.cd.swing, 0.42, "LMB / J"], ["Ropes", p.cd.rope, 0.7, "RMB / K"], ["Slam", p.cd.slam, 4, "Space"]];
   chips.forEach(([name, cd, max, key], i) => {
     const x = ARENA.x0 + 14 + i * 116, y = ARENA.y1 - 46;
     ctx.fillStyle = "rgba(20,30,28,.65)"; rr(x, y, 106, 34, 8); ctx.fill();
@@ -1116,7 +1194,7 @@ function drawPlay() {
   }
   if (p.sleep > 0) {
     ctx.fillStyle = "rgba(30,20,60,.35)"; ctx.fillRect(ARENA.x0, ARENA.y0, ARENA.x1 - ARENA.x0, ARENA.y1 - ARENA.y0);
-    outlinedText("Mash any key to wake up", (ARENA.x0 + ARENA.x1) / 2, (ARENA.y0 + ARENA.y1) / 2 + 120, 26, "#e6ddff", DISPLAY, "center", "#2b2440", 6);
+    outlinedText(touch.on ? "Tap tap tap to wake up" : "Mash any key to wake up",(ARENA.x0 + ARENA.x1) / 2, (ARENA.y0 + ARENA.y1) / 2 + 120, 26, "#e6ddff", DISPLAY, "center", "#2b2440", 6);
   }
 
   // Brock
@@ -1127,6 +1205,7 @@ function drawPlay() {
   if (b.sayT > 0 || b.call) drawBubble(b.call ? CALLS[b.call] : b.say, 14, BROCK.y - 82, 250, !!b.call);
 
   drawHud();
+  if (touch.on && state === "play") drawTouchControls();
 
   if (g.banner > 0) {
     const wv = WAVES[g.waveIdx];
@@ -1144,6 +1223,55 @@ function drawPlay() {
     ctx.globalAlpha = clamp(g.bigText.t / 0.4, 0, 1);
     outlinedText(g.bigText.text, 0, 0, 40, "#ff5a4a", DISPLAY, "center", "#1b0c0c", 8);
     ctx.restore(); ctx.globalAlpha = 1;
+  }
+}
+
+function drawTouchControls() {
+  const g = game, p = g.p;
+
+  // move stick: floats to wherever the thumb lands, resting hint otherwise
+  const s = touch.stick, SR = 70;
+  const bx = s ? s.sx : ARENA.x0 + 120, by = s ? s.sy : ARENA.y1 - 120;
+  ctx.globalAlpha = s ? 1 : 0.5;
+  ctx.fillStyle = "rgba(20,30,28,.35)"; circ(bx, by, SR); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.45)"; ctx.lineWidth = 3; circ(bx, by, SR); ctx.stroke();
+  let kx = bx, ky = by;
+  if (s) {
+    const dx = s.x - s.sx, dy = s.y - s.sy, l = Math.hypot(dx, dy), k = l > SR ? SR / l : 1;
+    kx += dx * k; ky += dy * k;
+  }
+  ctx.fillStyle = "rgba(255,255,255,.55)"; circ(kx, ky, 30); ctx.fill();
+  if (!s) text("Drag to move", bx, by + SR + 20, 13, "#ffffff", BODY, "center", "600");
+  ctx.globalAlpha = 1;
+
+  const cds = { swing: [p.cd.swing, 0.42], rope: [p.cd.rope, 0.7], slam: [p.cd.slam, 4] };
+  for (const b of TBTN) {
+    const held = touchHeld(b.id);
+    ctx.fillStyle = held ? "rgba(255,255,255,.35)" : "rgba(20,30,28,.55)";
+    circ(b.x, b.y, b.r); ctx.fill();
+
+    const cd = cds[b.id];
+    if (cd && cd[0] > 0) {
+      ctx.fillStyle = "rgba(0,0,0,.4)";
+      ctx.beginPath(); ctx.moveTo(b.x, b.y);
+      ctx.arc(b.x, b.y, b.r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(cd[0] / cd[1], 0, 1));
+      ctx.closePath(); ctx.fill();
+    }
+
+    let stroke = "rgba(255,255,255,.5)", labelColor = "#ffffff";
+    if (g.brock.call === b.id) stroke = "#ffe08a";
+    if (b.id === "ult") {
+      const ready = p.pain >= 100 && p.ult <= 0;
+      if (!ready) labelColor = "rgba(255,255,255,.5)";
+      if (ready && Math.sin(performance.now() / 90) > 0) stroke = "#ffffff";
+      ctx.strokeStyle = C.pain; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r - 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (p.ult > 0 ? p.ult / 6 : p.pain / 100)); ctx.stroke();
+    }
+    ctx.strokeStyle = stroke; ctx.lineWidth = 3; circ(b.x, b.y, b.r); ctx.stroke();
+
+    if (b.id === "pause") {
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(b.x - 7, b.y - 9, 5, 18); ctx.fillRect(b.x + 2, b.y - 9, 5, 18);
+    } else text(b.label, b.x, b.y + 1, b.r > 50 ? 18 : 15, labelColor, BODY, "center", "800");
   }
 }
 
@@ -1183,8 +1311,14 @@ function drawTitle() {
   text("They want you resting for a full year.", W / 2 + 300, 496, 15, "#cfe0da", BODY, "center", "400");
 
   text("Survive from week 5 to week 52. Keep your heart rate up, knock the cake back, stay out of the recliner.", W / 2, 560, 17, "#eef3ef", BODY, "center", "400");
-  button("Start week 5", W / 2 - 120, 600, 240, 56, () => { audioInit(); newGame(); }, true);
-  text("Or press Enter", W / 2, 680, 14, "#a9bdb6", BODY, "center", "400");
+  if (saved) {
+    button("Continue week " + WAVES[saved.waveIdx + 1].week, W / 2 - 260, 600, 250, 56, () => { audioInit(); continueGame(); }, true);
+    button("New game", W / 2 + 10, 600, 250, 56, () => { audioInit(); newGame(); }, false);
+    if (!touch.on) text("Enter to continue, N for a new game", W / 2, 680, 14, "#a9bdb6", BODY, "center", "400");
+  } else {
+    button("Start week 5", W / 2 - 120, 600, 240, 56, () => { audioInit(); newGame(); }, true);
+    if (!touch.on) text("Or press Enter", W / 2, 680, 14, "#a9bdb6", BODY, "center", "400");
+  }
 }
 
 function drawUpgrade() {
@@ -1215,7 +1349,7 @@ function drawUpgrade() {
   text("Next: week " + next.week + ", " + next.title.charAt(0).toLowerCase() + next.title.slice(1), W / 2, 486, 18, "#eef3ef", BODY, "center", "600");
   if (next.boss) text("Boss: " + next.boss.map(x => NANA[x].name).join(" and "), W / 2, 514, 16, "#ffb3a6", BODY, "center", "600");
   button("Start week " + next.week, W / 2 - 130, 560, 260, 56, nextWave, true);
-  text("Press 1 to 4 to buy, Enter to start", W / 2, 640, 14, "#a9bdb6", BODY, "center", "400");
+  text(touch.on ? "Tap a card to buy. Progress is saved." : "Press 1 to 4 to buy, Enter to start. Progress is saved.", W / 2, 640, 14, "#a9bdb6", BODY, "center", "400");
 }
 
 function drawOver() {
@@ -1229,7 +1363,7 @@ function drawOver() {
   text("Brock: \"Get up. Prepare for suck.\"", W / 2, 420, 19, "#ffe08a", BODY, "center", "600");
   button("Retry week " + wv.week, W / 2 - 270, 480, 250, 56, retryWave, true);
   button("New game", W / 2 + 20, 480, 250, 56, newGame, false);
-  text("Enter to retry, N for a new game. Your upgrades carry over on retry.", W / 2, 570, 14, "#bdb3cc", BODY, "center", "400");
+  text(touch.on ? "Your upgrades carry over on retry." : "Enter to retry, N for a new game. Your upgrades carry over on retry.", W / 2, 570, 14, "#bdb3cc", BODY, "center", "400");
 }
 
 function drawWin() {
@@ -1291,6 +1425,7 @@ window.addEventListener("mousemove", toCanvas);
 cv.addEventListener("contextmenu", e => e.preventDefault());
 cv.addEventListener("mousedown", e => {
   audioInit(); cv.focus(); toCanvas(e);
+  touch.on = false;
   if (state === "play") {
     const p = game.p;
     if (p.sleep > 0) { p.sleep = Math.max(0, p.sleep - 0.22); return; }
@@ -1317,8 +1452,10 @@ window.addEventListener("keydown", e => {
   }
   keys[e.code] = true;
 
-  if (state === "title" && e.code === "Enter") newGame();
-  else if (state === "play") {
+  if (state === "title") {
+    if (e.code === "Enter") { if (saved) continueGame(); else newGame(); }
+    if (e.code === "KeyN") newGame();
+  } else if (state === "play") {
     if (e.code === "KeyQ") activateUlt();
     if (e.code === "KeyP" || e.code === "Escape") { state = "paused"; clearInput(); }
   } else if (state === "paused") {
@@ -1335,7 +1472,60 @@ window.addEventListener("keydown", e => {
   }
 });
 window.addEventListener("keyup", e => { keys[e.code] = false; });
-function clearInput() { for (const k in keys) keys[k] = false; mouse.down = false; mouse.rdown = false; }
+function clearInput() {
+  for (const k in keys) keys[k] = false;
+  mouse.down = false; mouse.rdown = false;
+  touch.stick = null; touch.held = {};
+}
+
+// touch: preventDefault stops the browser from scrolling, zooming or faking mouse clicks
+function touchPoint(t) {
+  const r = cv.getBoundingClientRect();
+  return { x: (t.clientX - r.left) * (W / r.width), y: (t.clientY - r.top) * (H / r.height) };
+}
+cv.addEventListener("touchstart", e => {
+  e.preventDefault();
+  audioInit();
+  touch.on = true;
+  for (const t of e.changedTouches) {
+    const pt = touchPoint(t);
+    mouse.x = pt.x; mouse.y = pt.y;
+    if (state !== "play") {
+      for (const r of uiRects) {
+        if (pt.x > r.x && pt.x < r.x + r.w && pt.y > r.y && pt.y < r.y + r.h) { r.action(); break; }
+      }
+      continue;
+    }
+    const p = game.p;
+    if (p.sleep > 0) { p.sleep = Math.max(0, p.sleep - 0.22); continue; }
+    const b = TBTN.find(b => Math.hypot(pt.x - b.x, pt.y - b.y) < b.r + 14);
+    if (b) {
+      if (b.id === "pause") { state = "paused"; clearInput(); return; }
+      if (b.id === "ult") activateUlt();
+      else touch.held[t.identifier] = b.id;
+    } else if (!touch.stick && pt.x < W * 0.6) {
+      touch.stick = { id: t.identifier, sx: pt.x, sy: pt.y, x: pt.x, y: pt.y };
+    }
+  }
+}, { passive: false });
+cv.addEventListener("touchmove", e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (touch.stick && touch.stick.id === t.identifier) {
+      const pt = touchPoint(t);
+      touch.stick.x = pt.x; touch.stick.y = pt.y;
+    }
+  }
+}, { passive: false });
+const touchEnd = e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (touch.stick && touch.stick.id === t.identifier) touch.stick = null;
+    delete touch.held[t.identifier];
+  }
+};
+cv.addEventListener("touchend", touchEnd, { passive: false });
+cv.addEventListener("touchcancel", touchEnd, { passive: false });
 window.addEventListener("blur", () => { clearInput(); if (state === "play") state = "paused"; });
 
 // start
