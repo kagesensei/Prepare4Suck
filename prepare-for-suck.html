@@ -193,6 +193,17 @@ const UPGRADES = [
 const MAXLV = 5;
 const upCost = lv => 25 + lv * 20;
 
+// Mate in one before each boss week. Only from/to is checked, so each position was verified
+// (with chess.js) to have exactly one mating move.
+const PUZZLES = [
+  { fen: "6k1/5ppp/8/8/8/8/8/R5K1", from: "a1", to: "a8", san: "Ra8" },
+  { fen: "6rk/6pp/8/6N1/8/8/8/6K1", from: "g5", to: "f7", san: "Nf7" },
+  { fen: "7k/R7/5N2/8/8/8/8/6K1",   from: "a7", to: "h7", san: "Rh7" }
+];
+const PUZZLE_REWARD = [30, 20, 10];
+const GLYPH = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
+const PIECE_FONT = '"Segoe UI Symbol", "Noto Sans Symbols 2", "Apple Symbols", "DejaVu Sans", serif';
+
 const CALLS = { swing: "Swings! Now!", rope: "Ropes! Go!", slam: "Squat slam! Drop it!" };
 const QUIPS = [
   "Prepare for suck.",
@@ -499,8 +510,8 @@ function updatePlayer(dt) {
   const moving = (mx || my) && !disabled;
   if (moving) p.walk += dt * 10;
 
-  // heart rate
-  p.hr -= 7 * (1 - L.cardio * 0.12) * dt;
+  // heart rate (held during the week banner so nobody starts a week in brain fog)
+  if (g.banner <= 0) p.hr -= 7 * (1 - L.cardio * 0.12) * dt;
   if (moving) p.hr += 4 * dt;
   if (p.ult > 0) p.hr = 190;
   p.hr = clamp(p.hr, 62, 190);
@@ -510,6 +521,18 @@ function updatePlayer(dt) {
   if (p.hr > 140) p.fatigue -= (1.8 + L.cardio * 0.5) * dt;
   if (p.hr > 150) addPain(6 * dt);
   p.fatigue = clamp(p.fatigue, 0, 100);
+
+  // teach the two big rules the first time they come up in a run (unless Brock is mid call)
+  if (!g.brock.call) {
+    if (fog && !g.hintFog) {
+      g.hintFog = true;
+      say("Brain fog! Swing, move, anything. Get that heart rate up!", 4);
+      floatText(p.x, p.y - 50, "Heart rate too low", "#f0f0f6", 18, 1.6);
+    } else if (p.pain >= 100 && p.ult <= 0 && !g.hintPain) {
+      g.hintPain = true;
+      say(touch.on ? "Pain meter's full. Tap Pain and let it rip!" : "Pain meter's full. Hit Q and let it rip!", 4);
+    }
+  }
 
   // timers
   p.sleep = Math.max(0, p.sleep - dt);
@@ -754,8 +777,46 @@ function waveDone() {
   }
   state = "upgrade";
   writeSave();
+  if (WAVES[g.waveIdx + 1].boss) startPuzzle();
   sfx(523, 0.12, "square", 0.04); sfx(659, 0.18, "square", 0.04, 0, 0.12);
 }
+
+// ---------- Chess break ----------
+const sq = s => ({ c: s.charCodeAt(0) - 97, r: 8 - Number(s[1]) });
+function parseFen(fen) {
+  return fen.split("/").map(row => {
+    const out = [];
+    for (const ch of row) { if (ch >= "1" && ch <= "8") for (let i = 0; i < +ch; i++) out.push(null); else out.push(ch); }
+    return out;
+  });
+}
+function startPuzzle() {
+  const g = game, i = WAVES.slice(0, g.waveIdx + 1).filter(w => w.boss).length;
+  g.puz = { ...PUZZLES[i], board: parseFen(PUZZLES[i].fen), sel: null, tries: 0, done: false, solved: false, msg: "" };
+  state = "puzzle";
+}
+function puzzleClick(r, c) {
+  const z = game.puz;
+  if (z.done) return;
+  const piece = z.board[r][c];
+  if (piece && piece === piece.toUpperCase()) { z.sel = { r, c }; sfx(500, 0.04, "square", 0.03); return; }
+  if (!z.sel) return;
+  const f = sq(z.from), t = sq(z.to);
+  if (z.sel.r === f.r && z.sel.c === f.c && r === t.r && c === t.c) {
+    const reward = PUZZLE_REWARD[z.tries];
+    z.board[t.r][t.c] = z.board[f.r][f.c]; z.board[f.r][f.c] = null;
+    z.done = z.solved = true; z.sel = null;
+    game.reps += reward; writeSave();
+    z.msg = "Checkmate! +" + reward + " reps";
+    [523, 659, 784].forEach((fr, i) => sfx(fr, 0.15, "square", 0.04, 0, i * 0.1));
+  } else {
+    z.tries++; z.sel = null;
+    if (z.tries >= PUZZLE_REWARD.length) { z.done = true; z.msg = "The answer was " + z.san + ". No reps this time."; }
+    else z.msg = "Not mate. " + (PUZZLE_REWARD.length - z.tries) + (z.tries === 2 ? " try" : " tries") + " left.";
+    sfx(120, 0.12, "square", 0.04);
+  }
+}
+function endPuzzle() { game.puz = null; state = "upgrade"; }
 
 function buyUpgrade(i) {
   const g = game, u = UPGRADES[i];
@@ -1285,7 +1346,6 @@ function button(label, x, y, w, h, action, primary) {
 }
 
 function drawTitle() {
-  titleT += 1 / 60;
   drawFloor();
   ctx.fillStyle = "rgba(20,30,28,.55)"; ctx.fillRect(0, 0, W, H);
   outlinedText("Prepare for suck", W / 2, 120, 76, "#ffffff", DISPLAY, "center", "#1b2522", 10);
@@ -1352,6 +1412,58 @@ function drawUpgrade() {
   text(touch.on ? "Tap a card to buy. Progress is saved." : "Press 1 to 4 to buy, Enter to start. Progress is saved.", W / 2, 640, 14, "#a9bdb6", BODY, "center", "400");
 }
 
+function drawPuzzle() {
+  const g = game, z = g.puz, S = 64, bx = 170, by = 100;
+  drawFloor();
+  ctx.fillStyle = "rgba(20,30,28,.82)"; ctx.fillRect(0, 0, W, H);
+
+  // board
+  ctx.fillStyle = "#1b2522"; rr(bx - 10, by - 10, S * 8 + 20, S * 8 + 20, 10); ctx.fill();
+  const f = sq(z.from), t = sq(z.to);
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const x = bx + c * S, y = by + r * S;
+    ctx.fillStyle = (r + c) % 2 ? "#a57a52" : "#ecd9b0"; ctx.fillRect(x, y, S, S);
+    const picked = z.sel && z.sel.r === r && z.sel.c === c;
+    const answer = z.done && ((r === f.r && c === f.c) || (r === t.r && c === t.c));
+    if (picked || answer) {
+      ctx.fillStyle = z.done && !z.solved ? "rgba(255,143,122,.65)" : "rgba(255,224,138,.65)";
+      ctx.fillRect(x, y, S, S);
+    }
+    const p = z.board[r][c];
+    if (p) {
+      const white = p === p.toUpperCase(), gl = GLYPH[p.toLowerCase()] + "︎";
+      ctx.font = "52px " + PIECE_FONT; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineJoin = "round"; ctx.lineWidth = 3; ctx.strokeStyle = white ? "#1b2522" : "#f3ead8";
+      ctx.strokeText(gl, x + S / 2, y + S / 2 + 3);
+      ctx.fillStyle = white ? "#ffffff" : "#1b2522"; ctx.fillText(gl, x + S / 2, y + S / 2 + 3);
+    }
+    uiRects.push({ x, y, w: S, h: S, action: () => puzzleClick(r, c) });
+  }
+  for (let i = 0; i < 8; i++) {
+    text(String.fromCharCode(97 + i), bx + i * S + S / 2, by + 8 * S + 24, 14, "#a9bdb6", BODY, "center", "600");
+    text(String(8 - i), bx - 26, by + i * S + S / 2, 14, "#a9bdb6", BODY, "center", "600");
+  }
+
+  // side panel
+  const px = 760, pw = 440, next = WAVES[g.waveIdx + 1];
+  text("Boss next week", px, 118, 15, "#ffb3a6", BODY, "left", "800");
+  outlinedText("Chess break", px, 162, 44, "#ffffff", DISPLAY, "left");
+  let y = 222;
+  const para = (str, size, color, weight) => {
+    ctx.font = weight + " " + size + "px " + BODY;
+    for (const l of wrap(str, pw)) { text(l, px, y, size, color, BODY, "left", weight); y += size + 8; }
+    y += 10;
+  };
+  para(next.boss.map(b => NANA[b].name).join(" and ") + " is coming. Leofric's brain needs a workout too. Find checkmate in one move for bonus reps.", 17, "#cfe0da", "400");
+  para("White to move. " + (touch.on ? "Tap" : "Click") + " a piece, then the square it moves to.", 17, "#eef3ef", "600");
+  para("Reward: 30 reps on the first try, 20 on the second, 10 on the third.", 15, "#a9bdb6", "400");
+  if (z.msg) para(z.msg, 24, z.solved ? C.good : (z.done ? "#ff9a8a" : "#ffe08a"), "800");
+
+  if (z.done) button("Spend your reps", px, 560, 260, 56, endPuzzle, true);
+  else button("Skip", px, 560, 180, 56, endPuzzle, false);
+  if (!touch.on) text(z.done ? "Or press Enter" : "Or press S to skip", px, 640, 14, "#a9bdb6", BODY, "left", "400");
+}
+
 function drawOver() {
   drawPlay();
   uiRects = [];
@@ -1370,7 +1482,7 @@ function drawWin() {
   const g = game;
   drawFloor();
   ctx.fillStyle = "rgba(20,30,28,.7)"; ctx.fillRect(0, 0, W, H);
-  drawBrock(W / 2 - 160, 250, titleT += 1 / 60, 1.4);
+  drawBrock(W / 2 - 160, 250, titleT, 1.4);
   const fakeP = { x: W / 2 + 160, y: 260, r: 20, face: -1.2, walk: 0, sleep: 0, tangle: 0, frozen: 0, ult: 1, pumped: 0, hurt: 0, swingAnim: 0 };
   const keep = game; game = { lv: { rom: 0 } };
   ctx.save(); ctx.translate(W / 2 + 160, 260); ctx.scale(1.6, 1.6); ctx.translate(-(W / 2 + 160), -260);
@@ -1401,6 +1513,7 @@ function render() {
   if (state === "title") drawTitle();
   else if (state === "play") drawPlay();
   else if (state === "upgrade") drawUpgrade();
+  else if (state === "puzzle") drawPuzzle();
   else if (state === "over") drawOver();
   else if (state === "win") drawWin();
   else if (state === "paused") drawPaused();
@@ -1410,6 +1523,7 @@ function render() {
 function frame(now) {
   const dt = Math.min(0.033, (now - lastFrame) / 1000);
   lastFrame = now;
+  titleT += dt;
   if (state === "play") update(dt);
   render();
   requestAnimationFrame(frame);
@@ -1446,11 +1560,13 @@ window.addEventListener("keydown", e => {
   audioInit();
   if (e.code === "KeyM") { muted = !muted; return; }
 
-  if (state === "play" && game.p.sleep > 0 && !e.repeat) {
+  const pauseKey = e.code === "KeyP" || e.code === "Escape";
+  if (state === "play" && game.p.sleep > 0 && !e.repeat && !pauseKey) {
     game.p.sleep = Math.max(0, game.p.sleep - 0.22);
     return;
   }
   keys[e.code] = true;
+  if (e.repeat) return; // a held Enter must not click through several menus
 
   if (state === "title") {
     if (e.code === "Enter") { if (saved) continueGame(); else newGame(); }
@@ -1460,6 +1576,8 @@ window.addEventListener("keydown", e => {
     if (e.code === "KeyP" || e.code === "Escape") { state = "paused"; clearInput(); }
   } else if (state === "paused") {
     if (e.code === "KeyP" || e.code === "Escape" || e.code === "Enter") state = "play";
+  } else if (state === "puzzle") {
+    if (game.puz.done ? e.code === "Enter" : e.code === "KeyS") endPuzzle();
   } else if (state === "upgrade") {
     if (e.code === "Enter") nextWave();
     const n = ["Digit1", "Digit2", "Digit3", "Digit4"].indexOf(e.code);
@@ -1497,10 +1615,10 @@ cv.addEventListener("touchstart", e => {
       continue;
     }
     const p = game.p;
-    if (p.sleep > 0) { p.sleep = Math.max(0, p.sleep - 0.22); continue; }
     const b = TBTN.find(b => Math.hypot(pt.x - b.x, pt.y - b.y) < b.r + 14);
+    if (b && b.id === "pause") { state = "paused"; clearInput(); return; }
+    if (p.sleep > 0) { p.sleep = Math.max(0, p.sleep - 0.22); continue; }
     if (b) {
-      if (b.id === "pause") { state = "paused"; clearInput(); return; }
       if (b.id === "ult") activateUlt();
       else touch.held[t.identifier] = b.id;
     } else if (!touch.stick && pt.x < W * 0.6) {

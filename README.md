@@ -18,6 +18,8 @@ Every so often Brock, your trainer, blows his whistle and calls out an exercise.
 
 When the Pain meter fills, unleash **The answer is always more pain** for a few seconds of unstoppable berserk mode.
 
+Before each boss week you get a **chess break**: find checkmate in one move for bonus reps to spend on upgrades. Or skip it.
+
 ## The Comfort Brigade
 They love you. They want you resting for a full year. Fight them off.
 

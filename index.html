@@ -92,13 +92,8 @@
   .play:hover { background: var(--accent-hi); }
   .play:active { transform: translateY(3px); box-shadow: 0 1px 0 #1b2522; }
   .play:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
-  .play[aria-disabled="true"] {
-    background: #33463f; color: var(--muted); cursor: not-allowed; box-shadow: none;
-  }
-  .play[aria-disabled="true"]:active { transform: none; }
-
-  .meter { height: 10px; border-radius: 5px; background: rgba(255,255,255,.12); margin: 0 0 22px; overflow: hidden; }
-  .meter span { display: block; height: 100%; width: 35%; border-radius: 5px; background: linear-gradient(90deg, var(--pain), var(--salmon)); }
+  .play.secondary { background: #33463f; }
+  .play.secondary:hover { background: #40574f; }
 
   footer { color: var(--muted); font-size: 14px; text-align: center; line-height: 1.6; max-width: 620px; }
   footer a { color: var(--soft); }
@@ -121,20 +116,18 @@
 </header>
 
 <main>
-  <!-- When version 1 is ready: point href at prepare-for-suck.html, drop aria-disabled, and swap the meter for a description. -->
-  <section class="card">
-    <span class="badge soon">In training</span>
+  <section class="card live">
+    <span class="badge">New</span>
     <h2>Version 1</h2>
-    <p>Smoother and faster. The fixes for the beta's slowdowns and glitches are on their way.</p>
-    <div class="meter" role="img" aria-label="Version 1 is in progress"><span></span></div>
-    <a class="play" aria-disabled="true" role="link">Coming soon</a>
+    <p>Brock now teaches the rules as you play, no week starts in brain fog, and a chess break before every boss pays out bonus reps.</p>
+    <a class="play" href="prepare-for-suck.html">Play version 1</a>
   </section>
 
   <section class="card live">
-    <span class="badge">Playable now</span>
+    <span class="badge soon">Original</span>
     <h2>Beta</h2>
-    <p>The original. All 12 weeks, every boss, keyboard, mouse and touch. A little slow and glitchy in places, but the suck is real.</p>
-    <a class="play" href="prepare-for-suck-beta.html">Play the beta</a>
+    <p>The first version, kept as it was. All 12 weeks and every boss, but no hints and no chess.</p>
+    <a class="play secondary" href="prepare-for-suck-beta.html">Play the beta</a>
   </section>
 </main>
 
